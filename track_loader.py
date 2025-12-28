@@ -70,7 +70,6 @@ def scan_music_folder(music_dir="music"):
                 "author": None,
                 "album": None
             }
-
     return tracks
 
 
@@ -85,3 +84,4 @@ def save_tracks_json(output_file="tracks.json", music_dir="music"):
     return tracks
 
 
+save_tracks_json()

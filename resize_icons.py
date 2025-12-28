@@ -4,7 +4,7 @@ import os
 # Создай папку resized, если нужно
 os.makedirs('resized', exist_ok=True)
 
-for name in ['play.png', 'pause.png']:
+for name in ['play.png', 'pause.png', 'nextorback.png']:
     path = os.path.join('icons', name)
     if not os.path.exists(path):
         print(f"Нет файла: {path}")
@@ -15,4 +15,5 @@ for name in ['play.png', 'pause.png']:
         img_resized.save(os.path.join('resized', name))
     except Exception as e:
         print(f"Ошибка: {e}")
+
 
