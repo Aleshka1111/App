@@ -2,16 +2,25 @@
     "overdose": {
         "len_song": 88.79,
         "author": null,
-        "album": null
+        "album": null,
+        "filepath": "music\\overdose.mp3"
     },
     "люби меня алина": {
         "len_song": 97.07,
         "author": null,
-        "album": null
+        "album": null,
+        "filepath": "music\\люби меня алина.mp3"
     },
     "Сэлфхарм": {
         "len_song": 153.65,
         "author": null,
-        "album": null
+        "album": null,
+        "filepath": "music\\Сэлфхарм.mp3"
+    },
+    "солана флиппер": {
+        "len_song": 66.53,
+        "author": null,
+        "album": null,
+        "filepath": "music\\солана флиппер.mp3"
     }
 }

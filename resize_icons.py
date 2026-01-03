@@ -1,10 +1,9 @@
 from PIL import Image
 import os
 
-# Создай папку resized, если нужно
 os.makedirs('resized', exist_ok=True)
 
-for name in ['play.png', 'pause.png', 'nextorback.png']:
+for name in ['add.png']:
     path = os.path.join('icons', name)
     if not os.path.exists(path):
         print(f"Нет файла: {path}")
