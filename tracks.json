@@ -22,5 +22,11 @@
         "author": null,
         "album": null,
         "filepath": "music\\солана флиппер.mp3"
+    },
+    "оверсайз": {
+        "len_song": 145.3,
+        "author": null,
+        "album": null,
+        "filepath": "music\\оверсайз.mp3"
     }
 }
