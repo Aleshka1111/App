@@ -1,3 +1,4 @@
+# майн
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
@@ -31,6 +32,7 @@ class MusicApp(App):
         self.current_index = 0
         self.is_playing = False
         self.player = None
+        self.queue = [] 
 
         self.progress_fraction = 0.0
         self.is_scrubbing = False
@@ -53,9 +55,11 @@ class MusicApp(App):
         self.y_buttons = 0.1
         self.y_progress = 0.65
 
+        self.block_next_prev = False
+
         self.play_texture = self.load_image(['icons/play.png'])
         self.pause_texture = self.load_image(['icons/pause.png'])
-        self.nav_texture = self.load_image(['icons/nextorback.png'], mirror=False)
+        self.nav_texture = self.load_image(['icons/nextorback.png'])
         self.add_texture = self.load_image(['icons/add.png'])
         self.slider_texture = self.load_image(['icons/progress_bar_slider.png'])
         self.nav_texture_prev = self.flip_texture(self.nav_texture) if self.nav_texture else None
@@ -76,38 +80,34 @@ class MusicApp(App):
         self.play_btn.bind(on_press=self.on_play_press)
 
         Clock.schedule_once(self.init_ui, 0)
-
         self.container.bind(size=self.update_layout, pos=self.update_layout)
-
         self.container.bind(on_touch_down=self.on_progress_touch, on_touch_move=self.on_progress_touch)
 
         return main_layout
-    
+
     @property
     def progress_width(self):
         return self.container.width * 0.8
 
     def create_button(self, pos_hint, size):
-        btn = Button(
+        return Button(
             background_normal='',
             background_color=(0, 0, 0, 0),
             size_hint=(None, None),
             size=size,
             pos_hint=pos_hint
         )
-        return btn
-    
-    def on_container_resize(self, *args):
-        if self._resize_event:
-            Clock.unschedule(self._resize_event)
-        self._resize_event = Clock.schedule_once(self.update_layout, 0.05)
-
 
     def init_ui(self, dt):
         self.draw_icons()
         self.draw_progress_bar()
 
     def update_layout(self, *args):
+        if self._resize_event:
+            Clock.unschedule(self._resize_event)
+        self._resize_event = Clock.schedule_once(self._update_layout_safe, 0.05)
+
+    def _update_layout_safe(self, dt):
         self.draw_icons()
         self.draw_progress_bar()
 
@@ -122,7 +122,6 @@ class MusicApp(App):
             self.add_btn.canvas.before.clear()
             with self.add_btn.canvas.before:
                 Rectangle(texture=self.add_texture, pos=self.add_btn.pos, size=self.add_btn.size)
-            self.add_btn.unbind(pos=self.draw_add_icon, size=self.draw_add_icon)
             self.add_btn.bind(pos=self.draw_add_icon, size=self.draw_add_icon)
 
     def draw_next_icon(self, *args):
@@ -130,7 +129,6 @@ class MusicApp(App):
             self.next_btn.canvas.before.clear()
             with self.next_btn.canvas.before:
                 Rectangle(texture=self.nav_texture, pos=self.next_btn.pos, size=self.next_btn.size)
-            self.next_btn.unbind(pos=self.draw_next_icon, size=self.draw_next_icon)
             self.next_btn.bind(pos=self.draw_next_icon, size=self.draw_next_icon)
 
     def draw_prev_icon(self, *args):
@@ -138,7 +136,6 @@ class MusicApp(App):
             self.prev_btn.canvas.before.clear()
             with self.prev_btn.canvas.before:
                 Rectangle(texture=self.nav_texture_prev, pos=self.prev_btn.pos, size=self.prev_btn.size)
-            self.prev_btn.unbind(pos=self.draw_prev_icon, size=self.draw_prev_icon)
             self.prev_btn.bind(pos=self.draw_prev_icon, size=self.draw_prev_icon)
 
     def draw_play_icon(self, *args):
@@ -148,7 +145,6 @@ class MusicApp(App):
         with self.play_btn.canvas.before:
             tex = self.play_texture if not self.is_playing else self.pause_texture
             Rectangle(texture=tex, pos=self.play_btn.pos, size=self.play_btn.size)
-        self.play_btn.unbind(pos=self.draw_play_icon, size=self.draw_play_icon)
         self.play_btn.bind(pos=self.draw_play_icon, size=self.draw_play_icon)
 
     def draw_progress_bar(self, *args):
@@ -227,7 +223,12 @@ class MusicApp(App):
             duration = self.tracks[self.current_track_name()]["len_song"]
             seek_time = progress * duration
 
-            if hasattr(self, '_seek_event') and self._seek_event:
+            now = time()
+            if now - self._last_seek_time < 0.3:
+                return True
+            self._last_seek_time = now
+
+            if self._seek_event:
                 self._seek_event.cancel()
             self._seek_event = Clock.schedule_once(
                 lambda dt: self.safe_seek(seek_time), 0.05
@@ -237,50 +238,48 @@ class MusicApp(App):
         return False
 
     def safe_seek(self, seek_time):
-        try:
-            was_playing = self.is_playing
+        self.ignore_end_check = True
+        Clock.schedule_once(self.reset_ignore_check, 1.0)
 
-            self.load_current_track() 
+        self.load_current_track()
+        self.perform_seek_and_play(seek_time, self.is_playing)
 
-            Clock.schedule_once(lambda dt: self.perform_seek_and_play(seek_time, was_playing), 0.1)
-
-        except Exception as e:
-            print(f"Ошибка перемотки: {e}")
-            self.is_scrubbing = False
-            self.ignore_end_check = False
-
+    #бля это говнище снизу писала нейронка я ваще ебу че там нахуй, да мне чет вообще до пизды 
     def perform_seek_and_play(self, seek_time, was_playing):
-        try:
-            if self.player:
+        if not self.player:
+            return
+        def try_seek(dt):
+            try:
+                meta = self.player.get_metadata()
+                if not meta:
+                    return  
+
+                duration = meta.get('duration')
+                if not isinstance(duration, (int, float)) or duration <= 0:
+                    return  
+
                 self.player.seek(seek_time)
                 self.player.set_pause(not was_playing)
 
-                duration = self.tracks[self.current_track_name()]["len_song"]
                 self.update_progress_bar_position(seek_time / duration)
-
                 if was_playing:
                     Clock.unschedule(self.update_progress_bar_from_player)
                     Clock.schedule_interval(self.update_progress_bar_from_player, 0.1)
+                    self.is_playing = True
 
-                self.is_playing = was_playing
                 self.is_scrubbing = False
-                self.ignore_end_check = False
                 self.draw_play_icon()
+                print(f"Перемотка: {seek_time:.1f} сек")
 
-                print(f"Перемотка с перезагрузкой: {seek_time:.1f}")
+                Clock.unschedule(try_seek)
 
-        except Exception as e:
-            print(f"Ошибка после seek: {e}")
-            self.is_scrubbing = False
-            self.ignore_end_check = False
+            except Exception as e:
+                print(f"Ошибка в try_seek: {e}")
 
+        Clock.schedule_interval(try_seek, 0.1)
 
     def reset_ignore_check(self, dt):
         self.ignore_end_check = False
-
-    def reset_scrubbing(self, dt):
-        self.is_scrubbing = False
-
 
     def on_play_press(self, instance):
         if not self.player:
@@ -300,26 +299,24 @@ class MusicApp(App):
         self.draw_play_icon()
 
     def load_current_track(self):
+        if self.player:
+            self.player.close_player()
         path = self.current_track_name()
-        if path not in self.tracks: return
         full_path = self.tracks[path]["filepath"]
-        if not os.path.exists(full_path): return
+        if not os.path.exists(full_path):
+            return
 
         from ffpyplayer.player import MediaPlayer
         self.player = MediaPlayer(full_path)
         self.player.set_pause(True)
 
-        duration = self.tracks[path]["len_song"]
-        print(f"Загружен трек: {path} | Длительность: {duration:.1f} сек")
-
+        Clock.unschedule(self.check_end)
         Clock.schedule_interval(self.check_end, 0.5)
 
     def check_end(self, dt):
         if not self.is_playing or not self.player:
             return
-        if self.ignore_end_check:
-            return
-        if self.is_scrubbing:
+        if self.ignore_end_check or self.is_scrubbing:
             return
 
         duration = self.tracks[self.current_track_name()]["len_song"]
@@ -327,22 +324,45 @@ class MusicApp(App):
         if current >= duration - 0.5:
             self.next_track(None)
 
-
     def update_progress_bar_from_player(self, dt):
         if self.player and self.is_playing:
             duration = self.tracks[self.current_track_name()]["len_song"]
             current = self.player.get_pts()
-            progress = current / duration
-            self.update_progress_bar_position(progress)
+            self.update_progress_bar_position(current / duration)
 
     def next_track(self, instance):
-        if len(self.track_names) <= 1: return
-        self.current_index = (self.current_index + 1) % len(self.track_names)
-        self.play_new_track()
+        if self.block_next_prev:
+            return
+        self.block_next_prev = True
+        Clock.schedule_once(self.reset_block_next_prev, 0.3)
+        self._next_track_logic()
 
     def previous_track(self, instance):
-        if len(self.track_names) <= 1: return
+        if self.block_next_prev:
+            return
+        self.block_next_prev = True
+        Clock.schedule_once(self.reset_block_next_prev, 0.3)
+        self._previous_track_logic()
+
+    def reset_block_next_prev(self, dt):
+        self.block_next_prev = False
+
+    def _next_track_logic(self):
+        if self.queue:
+            next_name = self.queue.pop(0)
+            if next_name in self.tracks:
+                self.current_index = self.track_names.index(next_name)
+            else:
+                self._next_track_fallback()
+        else:
+            self._next_track_fallback()
+
+    def _previous_track_logic(self):
         self.current_index = (self.current_index - 1) % len(self.track_names)
+        self.play_new_track()
+
+    def _next_track_fallback(self):
+        self.current_index = (self.current_index + 1) % len(self.track_names)
         self.play_new_track()
 
     def play_new_track(self):
@@ -351,23 +371,16 @@ class MusicApp(App):
         if self.player:
             self.player.set_pause(True)
             self.player.close_player()
-        self.current_pos = 0
         self.load_current_track()
         if was_playing:
             Clock.schedule_once(lambda dt: self.on_play_press(None), 0.1)
 
-    def load_image(self, paths, mirror=False):
+    def load_image(self, paths):
         for path in paths:
             if os.path.exists(path):
-                try:
-                    img = CoreImage(path)
-                    if img.texture:
-                        if not mirror:
-                            return img.texture
-                        else:
-                            return self.flip_texture(img.texture)
-                except Exception as e:
-                    print(f"Ошибка загрузки {path}: {e}")
+                img = CoreImage(path)
+                if img.texture:
+                    return img.texture
         return None
 
     def flip_texture(self, texture):
@@ -387,14 +400,16 @@ class MusicApp(App):
 
     def current_track_name(self):
         return self.track_names[self.current_index]
-    
+
     def start_add_music(self, instance):
         content = BoxLayout(orientation='vertical')
-        fc = FileChooserListView(filters=['*.mp3', '*.wav'], path='/storage/emulated/0/Music')
+        fc = FileChooserListView(filters=['*.mp3', '*.wav'], path='/storage/emulated/0/Music')#да ошибка, но мне поебать 
         content.add_widget(fc)
         btns = BoxLayout(size_hint_y=None, height=50)
-        cancel = Button(text="Отмена"); choose = Button(text="Выбрать")
-        btns.add_widget(cancel); btns.add_widget(choose)
+        cancel = Button(text="Отмена")
+        choose = Button(text="Выбрать")
+        btns.add_widget(cancel)
+        btns.add_widget(choose)
         content.add_widget(btns)
         self.file_popup = Popup(title="Выбери аудиофайл", content=content, size_hint=(0.9, 0.9))
         self.file_popup.open()
@@ -403,7 +418,8 @@ class MusicApp(App):
 
     def on_file_chosen(self, selection):
         self.file_popup.dismiss()
-        if not selection: return
+        if not selection:
+            return
         self.selected_file_path = selection[0]
         self.show_metadata_form()
 
@@ -419,43 +435,45 @@ class MusicApp(App):
         self.album_input = TextInput(multiline=False)
         layout.add_widget(self.album_input)
         btns = BoxLayout(size_hint_y=None, height=50)
-        cancel = Button(text="Отмена"); save = Button(text="Добавить")
-        btns.add_widget(cancel); btns.add_widget(save)
+        cancel = Button(text="Отмена")
+        save = Button(text="Добавить в очередь")
+        btns.add_widget(cancel)
+        btns.add_widget(save)
         layout.add_widget(btns)
-        self.meta_popup = Popup(title="Добавить трек", content=layout, size_hint=(0.8, 0.7))
+        self.meta_popup = Popup(title="Добавить в очередь", content=layout, size_hint=(0.8, 0.7))
         self.meta_popup.open()
-        save.bind(on_press=self.save_track)
+        save.bind(on_press=self.add_to_queue)
         cancel.bind(on_press=self.meta_popup.dismiss)
 
-    def save_track(self, instance):
+    def add_to_queue(self, instance):
         title = self.title_input.text.strip()
-        if not title: return
-        info = get_audio_info(self.selected_file_path)
-        if not info: return
-        length = round(info["len_song"], 1)
-        music_dir = "music"; os.makedirs(music_dir, exist_ok=True)
-        ext = os.path.splitext(self.selected_file_path)[1]
-        dest_path = os.path.join(music_dir, f"{title}{ext}")
-        shutil.copy(self.selected_file_path, dest_path)
-        self.add_track_to_json(title, length)
+        if not title:
+            return
+        if title in self.tracks:
+            self.queue.append(title)
+            print(f"Трек '{title}' добавлен в очередь")
+        else:
+            info = get_audio_info(self.selected_file_path)
+            if not info:
+                return
+            length = round(info["len_song"], 1)
+            music_dir = "music"
+            os.makedirs(music_dir, exist_ok=True)
+            ext = os.path.splitext(self.selected_file_path)[1]
+            dest_path = os.path.join(music_dir, f"{title}{ext}")
+            shutil.copy(self.selected_file_path, dest_path)
+            self.tracks[title] = {
+                "filepath": f"music/{title}{ext}",
+                "len_song": length
+            }
+            self.track_names.append(title)
+            self.queue.append(title)
+            print(f"Новый трек '{title}' добавлен и в очередь")
+
         self.meta_popup.dismiss()
-        Clock.schedule_once(self.refresh_tracks, 0.5)
 
-    def add_track_to_json(self, title, length):
-        tracks = {}
-        if os.path.exists("tracks.json"):
-            with open("tracks.json", "r", encoding="utf-8") as f:
-                tracks = json.load(f)
-        tracks[title] = {
-            "len_song": length,
-            "filepath": f"music/{title}{os.path.splitext(self.selected_file_path)[1]}"
-        }
-        with open("tracks.json", "w", encoding="utf-8") as f:
-            json.dump(tracks, f, ensure_ascii=False, indent=4)
-
-    def refresh_tracks(self, dt):
-        self.tracks = load_tracks("tracks.json")
-        self.track_names = list(self.tracks.keys())
+    def save_track(self, instance):  
+        pass  
 
     def show_message(self, text):
         popup = Popup(title="Сообщение", content=Label(text=text), size_hint=(0.6, 0.3))
@@ -465,4 +483,3 @@ class MusicApp(App):
 
 if __name__ == '__main__':
     MusicApp().run()
-
