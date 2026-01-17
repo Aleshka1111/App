@@ -19,7 +19,6 @@ from load_track import load_tracks
 from track_loader import get_audio_info
 from time import time
 
-
 class MusicApp(App):
     def build(self):
         self.tracks = load_tracks("tracks.json")
@@ -56,6 +55,7 @@ class MusicApp(App):
         self.y_progress = 0.65
 
         self.block_next_prev = False
+        self.container.bind(on_touch_up=self.on_touch_up)
 
         self.play_texture = self.load_image(['icons/play.png'])
         self.pause_texture = self.load_image(['icons/pause.png'])
@@ -213,70 +213,89 @@ class MusicApp(App):
         bar_y = y + self.progress_height
 
         if x <= touch.x <= x + self.progress_width and y <= touch.y <= bar_y:
+            if self.is_playing:
+                Clock.unschedule(self.update_progress_bar_from_player)
+
             self.is_scrubbing = True
-            Clock.unschedule(self.update_progress_bar_from_player)
 
             pos_x = max(0, min(touch.x - x, self.progress_width))
             progress = pos_x / self.progress_width
+
+            progress = max(0.001, min(0.99, progress))
             self.update_progress_bar_position(progress)
 
-            duration = self.tracks[self.current_track_name()]["len_song"]
-            seek_time = progress * duration
-
-            now = time()
-            if now - self._last_seek_time < 0.3:
-                return True
-            self._last_seek_time = now
-
-            if self._seek_event:
-                self._seek_event.cancel()
-            self._seek_event = Clock.schedule_once(
-                lambda dt: self.safe_seek(seek_time), 0.05
-            )
-
+            if 'move' in touch.profile:
+                now = time()
+                if now - self._last_seek_time > 0.1:
+                    self._last_seek_time = now
+                    self._simple_seek(progress)
+            else:
+                if self._seek_event:
+                    Clock.unschedule(self._seek_event)
+                self._seek_event = Clock.schedule_once(
+                    lambda dt: self._simple_seek(progress), 0.1
+                )
+            
             return True
         return False
 
-    def safe_seek(self, seek_time):
-        self.ignore_end_check = True
-        Clock.schedule_once(self.reset_ignore_check, 1.0)
-
-        self.load_current_track()
-        self.perform_seek_and_play(seek_time, self.is_playing)
-
-    #бля это говнище снизу писала нейронка я ваще ебу че там нахуй, да мне чет вообще до пизды 
-    def perform_seek_and_play(self, seek_time, was_playing):
+    def _simple_seek(self, progress):
+        """Простая и надежная перемотка"""
         if not self.player:
             return
-        def try_seek(dt):
+        
+        try:
+            track_name = self.current_track_name()
+            if track_name not in self.tracks:
+                return
+                
+            duration = self.tracks[track_name]["len_song"]
+            if duration <= 0:
+                return
+            
+            seek_time = progress * duration
+            
+            print(f"Перемотка: {seek_time:.1f}/{duration:.1f} сек")
+            
+            self.ignore_end_check = True
+            Clock.schedule_once(self.reset_ignore_check, 2.0)
+            
+            was_playing = self.is_playing
+            
+            if was_playing:
+                self.player.set_pause(True)
+            Clock.schedule_once(lambda dt: self._do_actual_seek(seek_time, was_playing, progress), 0.05)
+            
+        except Exception as e:
+            print(f"Ошибка подготовки перемотки: {e}")
+
+    def _do_actual_seek(self, seek_time, was_playing, progress):
+        """Выполнить фактическую перемотку"""
+        try:
+            result = self.player.seek(seek_time, relative=False, accurate=False)
+
+            self.update_progress_bar_position(progress)
+
+            if was_playing:
+                Clock.schedule_once(lambda dt: self._safe_resume(), 0.1)
+                
+        except Exception as e:
+            print(f"Ошибка перемотки: {e}")
+
+    def _safe_resume(self):
+        """Безопасно возобновить воспроизведение"""
+        if self.player and self.is_playing:
             try:
-                meta = self.player.get_metadata()
-                if not meta:
-                    return  
-
-                duration = meta.get('duration')
-                if not isinstance(duration, (int, float)) or duration <= 0:
-                    return  
-
-                self.player.seek(seek_time)
-                self.player.set_pause(not was_playing)
-
-                self.update_progress_bar_position(seek_time / duration)
-                if was_playing:
-                    Clock.unschedule(self.update_progress_bar_from_player)
-                    Clock.schedule_interval(self.update_progress_bar_from_player, 0.1)
-                    self.is_playing = True
-
-                self.is_scrubbing = False
-                self.draw_play_icon()
-                print(f"Перемотка: {seek_time:.1f} сек")
-
-                Clock.unschedule(try_seek)
-
-            except Exception as e:
-                print(f"Ошибка в try_seek: {e}")
-
-        Clock.schedule_interval(try_seek, 0.1)
+                self.player.set_pause(False)
+            except:
+                pass
+    
+    def on_touch_up(self, widget, touch):
+        if self.is_scrubbing:
+            self.is_scrubbing = False
+            if self.is_playing:
+                Clock.schedule_interval(self.update_progress_bar_from_player, 0.1)
+        return False
 
     def reset_ignore_check(self, dt):
         self.ignore_end_check = False
@@ -314,22 +333,36 @@ class MusicApp(App):
         Clock.schedule_interval(self.check_end, 0.5)
 
     def check_end(self, dt):
-        if not self.is_playing or not self.player:
+        if not self.is_playing or not self.player or self.ignore_end_check or self.is_scrubbing:
             return
-        if self.ignore_end_check or self.is_scrubbing:
-            return
-
-        duration = self.tracks[self.current_track_name()]["len_song"]
-        current = self.player.get_pts()
-        if current >= duration - 0.5:
-            self.next_track(None)
+        
+        try:
+            track_name = self.current_track_name()
+            if track_name in self.tracks:
+                duration = self.tracks[track_name]["len_song"]
+                current = self.player.get_pts()
+                if current is not None and duration > 0 and current >= 0:
+                    if current >= duration - 0.5:
+                        print(f"Трек закончился, переключаем: {current:.1f}/{duration:.1f}")
+                        self.next_track(None)
+        except:
+            pass
 
     def update_progress_bar_from_player(self, dt):
-        if self.player and self.is_playing:
-            duration = self.tracks[self.current_track_name()]["len_song"]
-            current = self.player.get_pts()
-            self.update_progress_bar_position(current / duration)
-
+        if self.player and self.is_playing and not self.is_scrubbing:
+            try:
+                current = self.player.get_pts()
+                if current is None:
+                    return
+                    
+                track_name = self.current_track_name()
+                if track_name in self.tracks:
+                    duration = self.tracks[track_name]["len_song"]
+                    if duration > 0 and current >= 0:
+                        progress = min(current / duration, 0.999)
+                        self.update_progress_bar_position(progress)
+            except Exception as e:
+                pass
     def next_track(self, instance):
         if self.block_next_prev:
             return
@@ -364,6 +397,16 @@ class MusicApp(App):
     def _next_track_fallback(self):
         self.current_index = (self.current_index + 1) % len(self.track_names)
         self.play_new_track()
+
+    def _next_track_logic(self):
+        if self.queue:
+            next_name = self.queue.pop(0)
+            if next_name in self.tracks:
+                self.current_index = self.track_names.index(next_name)
+            else:
+                self._next_track_fallback()
+        else:
+            self._next_track_fallback()
 
     def play_new_track(self):
         was_playing = self.is_playing
