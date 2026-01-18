@@ -15,7 +15,7 @@ from kivy.metrics import dp
 import os
 import shutil
 import json
-from load_track import load_tracks
+from load_track import load_tracks, load_liked, toggle_like
 from track_loader import get_audio_info
 from time import time
 
@@ -74,6 +74,17 @@ class MusicApp(App):
         self.container.add_widget(self.play_btn)
         self.container.add_widget(self.next_btn)
 
+        self.heart_outline_texture = self.load_image(['icons/heart_outline.png'])
+        self.heart_filled_texture = self.load_image(['icons/heart_filled.png'])
+
+        self.like_btn = self.create_button(pos_hint={'center_x': 0.78, 'y': self.y_buttons}, size=(self.btn_size, self.btn_size))
+        self.container.add_widget(self.like_btn)
+        self.like_btn.bind(on_press=self.on_like_press)
+
+        self.like_btn.bind(pos=self.update_heart_icon, size=self.update_heart_icon)
+        self.update_heart_icon()
+
+
         self.add_btn.bind(on_press=self.start_add_music)
         self.prev_btn.bind(on_press=self.previous_track)
         self.next_btn.bind(on_press=self.next_track)
@@ -101,6 +112,30 @@ class MusicApp(App):
     def init_ui(self, dt):
         self.draw_icons()
         self.draw_progress_bar()
+        #self.update_heart_icon()
+
+    def update_heart_icon(self, *args):
+        liked = self.is_current_track_liked()
+        tex = self.heart_filled_texture if liked else self.heart_outline_texture
+        if tex:
+            self.like_btn.canvas.before.clear()
+            with self.like_btn.canvas.before:
+                Rectangle(texture=tex, pos=self.like_btn.pos, size=self.like_btn.size)
+
+
+
+    def is_current_track_liked(self):
+        track_name = self.current_track_name()
+        liked_list = load_liked()
+        return track_name in liked_list
+
+
+    def on_like_press(self, instance):
+        track_name = self.current_track_name()
+        toggled_on = toggle_like(track_name)  
+        self.update_heart_icon()
+
+
 
     def update_layout(self, *args):
         if self._resize_event:
@@ -240,7 +275,6 @@ class MusicApp(App):
         return False
 
     def _simple_seek(self, progress):
-        """Простая и надежная перемотка"""
         if not self.player:
             return
         
@@ -270,7 +304,6 @@ class MusicApp(App):
             print(f"Ошибка подготовки перемотки: {e}")
 
     def _do_actual_seek(self, seek_time, was_playing, progress):
-        """Выполнить фактическую перемотку"""
         try:
             result = self.player.seek(seek_time, relative=False, accurate=False)
 
@@ -283,7 +316,6 @@ class MusicApp(App):
             print(f"Ошибка перемотки: {e}")
 
     def _safe_resume(self):
-        """Безопасно возобновить воспроизведение"""
         if self.player and self.is_playing:
             try:
                 self.player.set_pause(False)
@@ -417,6 +449,7 @@ class MusicApp(App):
         self.load_current_track()
         if was_playing:
             Clock.schedule_once(lambda dt: self.on_play_press(None), 0.1)
+        Clock.schedule_once(lambda dt: self.update_heart_icon(), 0.05)
 
     def load_image(self, paths):
         for path in paths:
